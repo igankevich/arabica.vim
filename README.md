@@ -9,9 +9,8 @@ The following key bindings show how to use the plugin.
 Function and command names are self-explanatory.
 ```vim
 nnoremap <leader><enter> "jyiw:JavaImport j<c-z>
-nnoremap <silent> <leader>p :call JavaPackage()<cr>
-nnoremap <silent> <leader>s :call JavaSortImports()<cr>
-nnoremap <silent> <leader>r :call JavaRenameFile()<cr>
+nnoremap <silent> <leader>p :JavaPackage<cr>
+nnoremap <silent> <leader>r :JavaRenameFile<cr>
 ```
 
 # License

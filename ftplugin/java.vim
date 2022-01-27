@@ -22,9 +22,6 @@ function! JavaInsertImport(class)
     call g:JavaSortImports()
 endfunction
 
-command! -nargs=1 -complete=customlist,JavaImportComplete JavaImport
-    \ call JavaInsertImport('<args>')
-
 function! JavaImportComplete(ArgLead, CmdLine, CursorPos)
     let className = a:ArgLead
     return s:QueryFast("SELECT name FROM classes WHERE name LIKE '%." . className . "'")
@@ -165,17 +162,19 @@ function! JavaHome()
         return s:javaHome
     endif
     let s:javaHome = $JAVA_HOME
+    let javaPath = ''
     if !empty(s:javaHome)
-        return s:javaHome
+        let javaPath = s:javaHome . '/bin/java'
+    else
+        let javaPath = system('which java')
     endif
-    let javaPath = system('which java')
     let realPath = system('realpath ' . javaPath)
     let s:javaHome = fnamemodify(realPath, ':h:h')
     return s:javaHome
 endfunction
 
 function! s:Query(sql)
-    let path = a:classes
+    let path = s:classes
     if !filereadable(path)
         call mkdir(fnamemodify(path, ':h'), 'p')
         call system('sqlite3 ' . path, s:schema)
@@ -188,7 +187,10 @@ function! s:QueryFast(sql)
 endfunction
 
 function! s:ProjectJARs()
-    let classPath = system('mvn dependency:build-classpath -Dmdep.outputFile=/dev/stdout')
+    let tmpfile = getcwd() . '/.git/maven.tmp'
+    call mkdir(fnamemodify(tmpfile, ':h'), 'p')
+    call system('mvn dependency:build-classpath -Dmdep.outputFile=' . shellescape(tmpfile))
+    let classPath = readfile(tmpfile)[0]
     return split(classPath, ':')
 endfunction
 
@@ -212,7 +214,6 @@ function! JavaIndexClasses()
     for jar in jars
         call s:Query("INSERT INTO jars (path) VALUES ('" . jar . "')")
         let jarId = s:Query("SELECT id FROM jars WHERE path='" . jar . "'")[0]
-        echo jarId
         let sql = ''
         let files = systemlist('jar -tf ' . shellescape(jar))
         let lines = []
@@ -228,4 +229,14 @@ function! JavaIndexClasses()
         echo '[' . n . '/' . len(jars) . '] indexing ' . jar . (empty(ret) ? '' : (': ' . ret))
         let n = n + 1
     endfor
+    if len(jars) == 0
+        echo 'Index is up to date.'
+    endif
 endfunction
+
+command! -nargs=1 -complete=customlist,JavaImportComplete JavaImport
+    \ call JavaInsertImport('<args>')
+
+command! JavaIndexClasses call JavaIndexClasses()
+command! JavaPackage call JavaPackage()
+command! JavaRenameFile call JavaRenameFile()
