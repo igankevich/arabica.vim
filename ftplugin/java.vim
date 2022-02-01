@@ -92,34 +92,40 @@ function! FindLinesMatchingPattern(pattern)
 endfunction
 
 " rename current java file to match package and class name
-function! JavaRenameFile()
-    let className = 
-        \ FindLinesMatchingPattern('\vpublic\s+class\s+(\w+)')[0].line[1]
-    let firstLine = getline(1)
-    if firstLine !~# '^package'
-        echo 'Can not find package'
+function! JavaRenameFile() abort
+    let className = FindLinesMatchingPattern('\vpublic\s+(class|enum|interface)\s+(\w+)')[0].line[2]
+    let packageMatch = FindLinesMatchingPattern('\v\s*package\s+(.*)\s*;\s*')[0].line
+    if empty(packageMatch)
+        echo 'Can not find the package.'
+        return
+    endif
+    let package = substitute(trim(packageMatch[1]), "\\.", "/", "g")
+    let oldFilename = expand('%')
+    let prefix = ''
+    let middle = ''
+    let match = matchlist(oldFilename, '\v(.*)(src/test/java|src/main/java)(.*)')
+    if empty(match)
+        if className =~# 'Test$'
+            let middle = 'src/test/java'
+        else
+            let middle = 'src/main/java'
+        endif
     else
-        let package = substitute(firstLine, "package\\s*", "", "")
-        let package = substitute(package, "\\s*;\\s*", "", "")
-        let package = substitute(package, "\\.", "/", "g")
-        let prefix = expand('%')
-        if prefix =~# 'src/test/java'
-            let prefix = 'src/test/java'
-        elseif className =~# 'Test$'
-            let prefix = 'src/test/java'
-        else
-            let prefix = 'src/main/java'
+        let prefix = match[1]
+        let middle = match[2]
+    endif
+    let filename = prefix . middle . "/" . package . "/" . className . ".java"
+    if oldFilename !=# filename
+        if filereadable(filename)
+            echo 'File exists: ' . filename
+            return
         endif
-        let filename = prefix . "/" . package . "/" . className . ".java"
-        let oldFilename = expand('%')
-        if oldFilename !=# filename
-            echo filename
-            silent !rm %
-            execute "saveas " . filename
-            redraw!
-        else
-            echo 'File names are identical.'
-        endif
+        call mkdir(fnamemodify(filename, ':h'), 'p')
+        execute "saveas " . filename
+        call delete(oldFilename)
+        redraw!
+    else
+        echo 'File names are identical.'
     endif
 endfunction
 
@@ -149,7 +155,8 @@ endfunction
 let s:javaHome = ''
 let s:schema = 'CREATE TABLE jars (
             \   id INTEGER NOT NULL PRIMARY KEY,
-            \   path TEXT NOT NULL UNIQUE);
+            \   path TEXT NOT NULL UNIQUE,
+            \   hash TEXT NOT NULL);
             \ CREATE TABLE classes (
             \   name TEXT NOT NULL,
             \   jar_id INTEGER NOT NULL,
@@ -186,12 +193,16 @@ function! s:QueryFast(sql)
     return systemlist("sqlite3 " . s:classes . " " . shellescape(a:sql))
 endfunction
 
-function! s:ProjectJARs()
+function! s:ProjectDependenciesJARs()
     let tmpfile = getcwd() . '/.git/maven.tmp'
     call mkdir(fnamemodify(tmpfile, ':h'), 'p')
     call system('mvn dependency:build-classpath -Dmdep.outputFile=' . shellescape(tmpfile))
     let classPath = readfile(tmpfile)[0]
-    return split(classPath, ':')
+    return uniq(sort(split(classPath, ':')))
+endfunction
+
+function! s:ProjectJARs()
+    return systemlist('find ' . shellescape(getcwd()) . ' -type f -name "*.jar"')
 endfunction
 
 function! s:SystemJARs()
@@ -208,11 +219,36 @@ function! s:PathToClassName(filename)
     return tr(fnamemodify(a:filename, ':r'), '/', '.')
 endfunction
 
+function! s:SHA256(filename)
+    return split(system('sha256sum ' . shellescape(a:filename)))[0]
+endfunction
+
+function! s:DeleteNonExistingJARs()
+    let jars = map(s:Query("SELECT id,path,hash FROM jars"), {key, value -> split(value,'|')})
+    let ids = []
+    for jar in jars
+        if !filereadable(jar[1])
+            call add(ids, jar[0])
+            echo 'remove from index ' . jar[1]
+            continue
+        endif
+        let actualHash = s:SHA256(jar[1])
+        if actualHash !=# jar[2]
+            call add(ids, jar[0])
+            continue
+        endif
+    endfor
+    call s:Query("DELETE FROM jars WHERE id IN (" . join(ids,',') . ")")
+    return ids
+endfunction
+
 function! JavaIndexClasses()
-    let jars = s:NotIndexedJARs(s:ProjectJARs() + s:SystemJARs())
+    let deletedJars = s:DeleteNonExistingJARs()
+    let jars = s:NotIndexedJARs(s:ProjectJARs() + s:ProjectDependenciesJARs() + s:SystemJARs())
     let n = 1
     for jar in jars
-        call s:Query("INSERT INTO jars (path) VALUES ('" . jar . "')")
+        let hash = s:SHA256(jar)
+        call s:Query("INSERT INTO jars (path,hash) VALUES ('" . jar . "', '" . hash . "')")
         let jarId = s:Query("SELECT id FROM jars WHERE path='" . jar . "'")[0]
         let sql = ''
         let files = systemlist('jar -tf ' . shellescape(jar))
@@ -226,10 +262,10 @@ function! JavaIndexClasses()
         let tmpfile = '.git/classes.tmp'
         call writefile(lines, tmpfile)
         let ret = s:Query('.import ' . tmpfile . ' classes')
-        echo '[' . n . '/' . len(jars) . '] indexing ' . jar . (empty(ret) ? '' : (': ' . ret))
+        echo '[' . n . '/' . len(jars) . '] index ' . jar . (empty(ret) ? '' : (': ' . ret))
         let n = n + 1
     endfor
-    if len(jars) == 0
+    if len(jars) == 0 && len(deletedJars) == 0
         echo 'Index is up to date.'
     endif
 endfunction

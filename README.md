@@ -3,12 +3,13 @@
 Arabica is a vim plugin for Java that generates frequently written code.
 - Generate import statement for the class under cursor.
 - Generate package name from the file system path.
-- Generate file name based on the package name.
+- Generate file system path based on the package name and the class name.
 
 The following key bindings show how to use the plugin.
-Function and command names are self-explanatory.
+Command names are self-explanatory.
 ```vim
 nnoremap <leader><enter> "jyiw:JavaImport j<c-z>
+" you can type ^R symbol in Vim as <C-v><C-r>
 nnoremap <silent> <leader>p :JavaPackage<cr>
 nnoremap <silent> <leader>r :JavaRenameFile<cr>
 ```
