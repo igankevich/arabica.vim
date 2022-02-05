@@ -24,7 +24,18 @@ endfunction
 
 function! JavaImportComplete(ArgLead, CmdLine, CursorPos)
     let className = a:ArgLead
-    return s:QueryFast("SELECT name FROM classes WHERE name LIKE '%." . className . "'")
+    let channel = s:GetChannel()
+    call ch_sendraw(channel, 'select ' . className . "\n")
+    return split(ch_read(channel))
+endfunction
+
+function! s:GetChannel()
+    call JavaCompileArabica()
+    if !s:jobStarted
+        let s:job = job_start('java -cp ' . s:classPath . ' Arabica')
+        let s:jobStarted = 1
+    endif
+    return job_getchannel(s:job)
 endfunction
 
 function s:LineNumberOfTheFirstImport()
@@ -132,7 +143,7 @@ endfunction
 " find full Java class name
 function! JavaClassName()
     let className = 
-        \ FindLinesMatchingPattern('\vpublic\s+class\s+(\w+)')[0].line[1]
+                \ FindLinesMatchingPattern('\vpublic\s+class\s+(\w+)')[0].line[1]
     let firstLine = getline(1)
     if firstLine !~# '^package'
         echo 'Can not find package'
@@ -153,16 +164,19 @@ function! JavaSerialVer()
 endfunction
 
 let s:javaHome = ''
-let s:schema = 'CREATE TABLE jars (
-            \   id INTEGER NOT NULL PRIMARY KEY,
-            \   path TEXT NOT NULL UNIQUE,
-            \   hash TEXT NOT NULL);
-            \ CREATE TABLE classes (
-            \   name TEXT NOT NULL,
-            \   jar_id INTEGER NOT NULL,
-            \  FOREIGN KEY (jar_id) REFERENCES jars(id) ON DELETE CASCADE ON UPDATE CASCADE);
-            \ CREATE INDEX classes_name_index ON classes(name);'
-let s:classes = '.git/classes.sqlite3'
+let s:classPath = expand("<sfile>:h")
+let s:jobStarted = 0
+
+function! JavaCompileArabica()
+    if filereadable(s:classPath . '/Arabica.class')
+        return
+    endif
+    let output = system('javac ' . s:classPath . '/Arabica.java')
+    if v:shell_error
+        echo output
+        return
+    endif
+endfunction
 
 function! JavaHome()
     if !empty(s:javaHome)
@@ -175,22 +189,9 @@ function! JavaHome()
     else
         let javaPath = system('which java')
     endif
-    let realPath = system('realpath ' . javaPath)
+    let realPath = resolve(javaPath)
     let s:javaHome = fnamemodify(realPath, ':h:h')
     return s:javaHome
-endfunction
-
-function! s:Query(sql)
-    let path = s:classes
-    if !filereadable(path)
-        call mkdir(fnamemodify(path, ':h'), 'p')
-        call system('sqlite3 ' . path, s:schema)
-    endif
-    return systemlist('sqlite3 '. path, ".mode list\nPRAGMA foreign_keys = ON;\n" . a:sql)
-endfunction
-
-function! s:QueryFast(sql)
-    return systemlist("sqlite3 " . s:classes . " " . shellescape(a:sql))
 endfunction
 
 function! s:ProjectDependenciesJARs()
@@ -209,69 +210,18 @@ function! s:SystemJARs()
     return [JavaHome() . '/jre/lib/rt.jar']
 endfunction
 
-function! s:NotIndexedJARs(all_jars)
-    let sql = join(map(a:all_jars, {key, value -> "('" . value . "')"}), ",\n")
-    let sql = "SELECT * FROM (VALUES\n" . sql . ")\nEXCEPT SELECT path FROM jars"
-    return s:Query(sql)
-endfunction
-
-function! s:PathToClassName(filename)
-    return tr(fnamemodify(a:filename, ':r'), '/', '.')
-endfunction
-
-function! s:SHA256(filename)
-    return split(system('sha256sum ' . shellescape(a:filename)))[0]
-endfunction
-
-function! s:DeleteNonExistingJARs()
-    let jars = map(s:Query("SELECT id,path,hash FROM jars"), {key, value -> split(value,'|')})
-    let ids = []
-    for jar in jars
-        if !filereadable(jar[1])
-            call add(ids, jar[0])
-            echo 'remove from index ' . jar[1]
-            continue
-        endif
-        let actualHash = s:SHA256(jar[1])
-        if actualHash !=# jar[2]
-            call add(ids, jar[0])
-            continue
-        endif
-    endfor
-    call s:Query("DELETE FROM jars WHERE id IN (" . join(ids,',') . ")")
-    return ids
-endfunction
-
 function! JavaIndexClasses()
-    let deletedJars = s:DeleteNonExistingJARs()
-    let jars = s:NotIndexedJARs(s:ProjectJARs() + s:ProjectDependenciesJARs() + s:SystemJARs())
-    let n = 1
-    for jar in jars
-        let hash = s:SHA256(jar)
-        call s:Query("INSERT INTO jars (path,hash) VALUES ('" . jar . "', '" . hash . "')")
-        let jarId = s:Query("SELECT id FROM jars WHERE path='" . jar . "'")[0]
-        let sql = ''
-        let files = systemlist('jar -tf ' . shellescape(jar))
-        let lines = []
-        for file in files
-            if file =~# '\.class$'
-                let className = s:PathToClassName(file)
-                let lines = add(lines, className . '|' . jarId)
-            endif
-        endfor
-        let tmpfile = '.git/classes.tmp'
-        call writefile(lines, tmpfile)
-        let ret = s:Query('.import ' . tmpfile . ' classes')
-        echo '[' . n . '/' . len(jars) . '] index ' . jar . (empty(ret) ? '' : (': ' . ret))
-        let n = n + 1
+    let jars = uniq(sort(s:ProjectDependenciesJARs() + s:SystemJARs()))
+    let channel = s:GetChannel()
+    call ch_sendraw(channel, 'index ' . join(jars, ' ') . "\n")
+    let nlines = str2nr(ch_read(channel))
+    for i in range(nlines)
+        echo ch_read(channel)
     endfor
-    if len(jars) == 0 && len(deletedJars) == 0
-        echo 'Index is up to date.'
-    endif
 endfunction
 
 command! -nargs=1 -complete=customlist,JavaImportComplete JavaImport
-    \ call JavaInsertImport('<args>')
+            \ call JavaInsertImport('<args>')
 
 command! JavaIndexClasses call JavaIndexClasses()
 command! JavaPackage call JavaPackage()
