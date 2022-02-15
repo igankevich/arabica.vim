@@ -10,8 +10,9 @@ Command names are self-explanatory.
 ```vim
 nnoremap <leader><enter> "jyiw:JavaImport j<c-z>
 " you can type ^R symbol in Vim as <C-v><C-r>
-nnoremap <silent> <leader>p :JavaPackage<cr>
-nnoremap <silent> <leader>r :JavaRenameFile<cr>
+nnoremap <silent> <leader>r :JavaRenameClass<cr>
+nnoremap <silent> <leader>R :JavaRenameFile<cr>
+nnoremap <silent> <leader>s :JavaSerialVersion<cr>
 ```
 
 # License

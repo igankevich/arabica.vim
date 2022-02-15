@@ -7,22 +7,6 @@ if exists("arabica_loaded")
 endif
 let arabica_loaded = 1
 
-" Insert java package name calculated from the current file path.
-function! g:JavaPackage()
-    let package = expand('%')
-    let filename = "\." . expand('%:t') . "$"
-    let package = substitute(package, ".*src/main/java/", "", "")
-    let package = substitute(package, ".*src/test/java/", "", "")
-    let package = substitute(package, filename, "", "")
-    let package = substitute(package, "/", ".", "g")
-    let firstLine = getline(1)
-    if firstLine =~# '^package'
-        call setline(1, 'package ' . package . ';')
-    else
-        call append(firstLine, 'package ' . package . ';')
-    endif
-endfunction
-
 function! JavaInsertImport(class)
     call append(s:LineNumberOfTheFirstImport(), 'import ' . a:class . ';')
     call g:JavaSortImports()
@@ -94,7 +78,7 @@ function! g:JavaSortImports()
     call winrestview(oldView)
 endfunction
 
-function! FindLinesMatchingPattern(pattern)
+function! s:FindLinesMatchingPattern(pattern)
     let lineno = 1
     let num_lines = line('$')
     let result = []
@@ -110,8 +94,8 @@ endfunction
 
 " rename current java file to match package and class name
 function! JavaRenameFile() abort
-    let className = FindLinesMatchingPattern('\vpublic\s+(class|enum|interface)\s+(\w+)')[0].line[2]
-    let packageMatch = FindLinesMatchingPattern('\v\s*package\s+(.*)\s*;\s*')[0].line
+    let className = s:FindLinesMatchingPattern('\vpublic\s+(class|abstract\s+class|enum|interface)\s+(\w+)')[0].line[2]
+    let packageMatch = s:FindLinesMatchingPattern('\v\s*package\s+(.*)\s*;\s*')[0].line
     if empty(packageMatch)
         echo 'Can not find the package.'
         return
@@ -146,10 +130,48 @@ function! JavaRenameFile() abort
     endif
 endfunction
 
+function! JavaRenameClass() abort
+    let match = s:JavaFilenameMatch()
+    call s:JavaClassSetName(s:JavaClassName(match))
+    call s:JavaPackageSetName(s:JavaPackageName(match))
+endfunction
+
+function! s:JavaFilenameMatch() abort
+    return matchlist(expand('%'), '\v(.*)src/(test|main)/(java|scala)/(.*)')
+endfunction
+
+function! s:JavaPackageName(match) abort
+    return substitute(fnamemodify(a:match[4], ':h'), '/', '.', 'g')
+endfunction
+
+function! s:JavaClassName(match) abort
+    return fnamemodify(a:match[4], ':t:r')
+endfunction
+
+function! s:JavaPackageSetName(name) abort
+    let packageLines = s:FindLinesMatchingPattern('\v\s*package\s+(.*)\s*;\s*')
+    let newPackageLine =  'package ' . a:name . ';'
+    if empty(packageLines)
+        call append(0, newPackageLine)
+    else
+        call setline(packageLines[0].lineno, newPackageLine)
+    endif
+endfunction
+
+function! s:JavaClassSetName(name) abort
+    let classLines = s:FindLinesMatchingPattern('\vpublic\s+(class|abstract\s+class|enum|interface)\s+(\w+)(.*)')
+    if empty(classLines)
+        call append(line('$'), ['public class ' . a:name . ' {', '}'])
+    else
+        let line = classLines[0]
+        call setline(line.lineno, 'public ' . line.line[1] . ' ' . a:name . line.line[3])
+    endif
+endfunction
+
 " find full Java class name
 function! JavaClassName()
     let className = 
-                \ FindLinesMatchingPattern('\vpublic\s+class\s+(\w+)')[0].line[1]
+                \ s:FindLinesMatchingPattern('\vpublic\s+class\s+(\w+)')[0].line[1]
     let firstLine = getline(1)
     if firstLine !~# '^package'
         echo 'Can not find package'
@@ -163,10 +185,15 @@ endfunction
 
 function! JavaSerialVer()
     let className = JavaClassName()
-    let classPath = system('mvn dependency:build-classpath -Dmdep.outputFile=/dev/stdout')
-    let line = system('serialver -classpath target/classes:' . classPath . ' ' . className)
-    let code = split(line, ':\s*')[1]
-    call append(getline('.'), code)
+    let classPath = s:MavenBuildClasspath()
+    let line = system('serialver -classpath target/classes:' . shellescape(classPath)
+                \ . ' ' . shellescape(className))
+    if v:shell_error
+        echo line
+        return
+    endif
+    let code = trim(split(line, ':\s*')[1])
+    call append(line('.'), code)
 endfunction
 
 let s:javaHome = ''
@@ -174,10 +201,12 @@ let s:classPath = expand("<sfile>:h")
 let s:jobStarted = 0
 
 function! JavaCompileArabica()
-    if filereadable(s:classPath . '/Arabica.class')
+    let javaFile = s:classPath . '/Arabica.java'
+    let classFile = s:classPath . '/Arabica.class'
+    if filereadable(classFile) && getftime(javaFile) <= getftime(classFile)
         return
     endif
-    let output = system('javac ' . s:classPath . '/Arabica.java')
+    let output = system('javac ' . shellescape(javaFile))
     if v:shell_error
         echo output
         return
@@ -200,11 +229,15 @@ function! JavaHome()
     return s:javaHome
 endfunction
 
-function! s:ProjectDependenciesJARs()
+function! s:MavenBuildClasspath() abort
     let tmpfile = getcwd() . '/.git/maven.tmp'
     call mkdir(fnamemodify(tmpfile, ':h'), 'p')
     call system('mvn dependency:build-classpath -Dmdep.outputFile=' . shellescape(tmpfile))
-    let classPath = readfile(tmpfile)[0]
+    return readfile(tmpfile)[0]
+endfunction
+
+function! s:ProjectDependenciesJARs()
+    let classPath = s:MavenBuildClasspath()
     return uniq(sort(split(classPath, ':')))
 endfunction
 
@@ -230,5 +263,7 @@ command! -nargs=1 -complete=customlist,JavaImportComplete JavaImport
             \ call JavaInsertImport('<args>')
 
 command! JavaIndexClasses call JavaIndexClasses()
-command! JavaPackage call JavaPackage()
+command! JavaPackage call JavaRenameClass()
 command! JavaRenameFile call JavaRenameFile()
+command! JavaRenameClass call JavaRenameClass()
+command! JavaSerialVersion call JavaSerialVer()
