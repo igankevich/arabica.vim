@@ -1,6 +1,12 @@
 " Vim plugin for Java.
 " Author: Ivan Gankevich <igankevich@ya.ru>
 
+" script guard
+if exists("arabica_loaded")
+    finish
+endif
+let arabica_loaded = 1
+
 " Insert java package name calculated from the current file path.
 function! g:JavaPackage()
     let package = expand('%')
