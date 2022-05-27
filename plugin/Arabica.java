@@ -1,16 +1,17 @@
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.FileVisitResult;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
@@ -24,10 +25,9 @@ import java.util.jar.JarFile;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
-public class Arabica {
+public final class Arabica {
 
     static Map<String, SortedSet<String>> classes = new HashMap<>();
-    static String filename = ".git/arabica.db";
 
     static void indexJar(String path) throws IOException {
         JarFile jar = new JarFile(path);
@@ -105,6 +105,11 @@ public class Arabica {
     }
 
     static void save() {
+        String filename = getDatabasePath();
+        File file = new File(filename).getParentFile();
+        if (file != null) {
+            file.mkdirs();
+        }
         try (ObjectOutputStream out =
                 new ObjectOutputStream(new GZIPOutputStream(new FileOutputStream(filename)))) {
             out.writeObject(classes);
@@ -115,6 +120,7 @@ public class Arabica {
 
     @SuppressWarnings("unchecked")
     static void load() {
+        String filename = getDatabasePath();
         try (ObjectInputStream in =
                 new ObjectInputStream(new GZIPInputStream(new FileInputStream(filename)))) {
             classes = (Map<String, SortedSet<String>>) in.readObject();
@@ -159,5 +165,45 @@ public class Arabica {
                     break;
             }
         }
+    }
+
+    static String getDatabasePath() {
+        final String filename = "arabica.db";
+        String path = null;
+        try {
+            List<String> lines = execute("git", "rev-parse", "--show-toplevel");
+            if (!lines.isEmpty()) {
+                path = Paths.get(lines.get(0), ".git", filename).toString();
+            }
+        } catch (Exception ex) {
+            System.err.println(ex.getMessage());
+        }
+        if (path != null) {
+            return path;
+        }
+        path = Paths.get(".git", filename).toString();
+        return path;
+    }
+
+    static List<String> execute(String... args) throws IOException, InterruptedException {
+        return execute(Arrays.asList(args));
+    }
+
+    static List<String> execute(List<String> args) throws IOException, InterruptedException {
+        ProcessBuilder builder = new ProcessBuilder(args);
+        Process process = builder.start();
+        List<String> lines = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                lines.add(line);
+            }
+        }
+        int exitValue = process.waitFor();
+        if (exitValue != 0) {
+            throw new RuntimeException(
+                    "command " + builder.command() + " exited with status=" + exitValue);
+        }
+        return lines;
     }
 }

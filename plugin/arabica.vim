@@ -230,7 +230,7 @@ function! JavaHome()
 endfunction
 
 function! s:MavenBuildClasspath() abort
-    let tmpfile = getcwd() . '/.git/maven.tmp'
+    let tmpfile = s:GitRoot() . '/.git/maven.tmp'
     call mkdir(fnamemodify(tmpfile, ':h'), 'p')
     call system('mvn dependency:build-classpath -Dmdep.outputFile=' . shellescape(tmpfile))
     return readfile(tmpfile)[0]
@@ -243,6 +243,14 @@ endfunction
 
 function! s:ProjectJARs()
     return systemlist('find ' . shellescape(getcwd()) . ' -type f -name "*.jar"')
+endfunction
+
+function! s:GitRoot()
+    try
+        return systemlist('git rev-parse --show-toplevel')[0]
+    catch 
+        return getcwd()
+    endtry
 endfunction
 
 function! s:SystemJARs()
